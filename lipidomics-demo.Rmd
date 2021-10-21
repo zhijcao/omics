@@ -1,0 +1,719 @@
+---
+title: "Lipidomics data analysis with R"
+subtitle: "Aanlyze lipids data generated from Lipidizer"
+author: "zhijun cao"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+            number_sections: yes
+            theme: journal
+            toc: yes
+            toc_float: yes
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+All files resulted from this analysis were located:
+C:/zhijuncao/R/demo/
+```{r}
+#rm(list=ls())
+filepath <- "C:/zhijuncao/R/demo/"
+```
+
+
+```{r loading library}
+library(ggplot2)
+library(ggpubr)
+library(tibble)
+library(openxlsx)
+library(purrr)
+library(cowplot)
+library(magrittr)
+library(dplyr)
+library(tidyr)
+library(DT)
+```
+
+# Data reshape
+
+## Read lipids MarkerLynx XS Marker Report 
+
+```{r , echo=TRUE}
+intest <- read.xlsx("C:/zhijuncao/R/demo/lipids.xlsx", sheet = "Sheet1")
+
+datatable(intest, options = list(scrollX = TRUE))
+
+```
+
+## Reshape function: tranform the lipid report to a tyde table (samples in rows, lipids in columns) 
+```{r}
+lipid_report_clean <-
+  function(tem = intest,
+           sample_info = c(1:3),
+           lipid_info = c(1:6)) {
+    #samples meta data
+    sample_meta <- t(tem[sample_info, -lipid_info]) %>% data.frame()
+    names(sample_meta) <- c("LCMS", "Animalid", "Samples")
+    
+    #lipids meta data
+    lipids_meta <- tem[-sample_info, lipid_info]
+    is_class <- is.na(lipids_meta) %>% rowSums(.)
+    
+    #create lipid class column
+    Class <- c()
+    for (i in 1:length(is_class)) {
+      if (is_class[i])
+      {
+        tem_class <- lipids_meta[[1]][i]
+      }
+      Class[i] <- tem_class
+    }
+    lipid_meta1 <-
+      lipids_meta %>% add_column(uniID = paste0("X", 1:nrow(.)),
+                                 Class = Class,
+                                 .before = 1)
+    names(lipid_meta1)[-c(1:2)] <-
+      paste(tem[max(sample_info), lipid_info])
+    
+    #transpose lipids from row to column
+    data_df <-
+      t(tem[-sample_info, -lipid_info]) %>% data.frame() %>% mutate_all(as.numeric)
+    names(data_df) <- lipid_meta1$uniID
+    
+    #combined sample meta data with data
+    data <- cbind(sample_meta, data_df)
+    
+    return (list(data = data, ids = lipid_meta1))
+    
+}
+```
+
+## Reshape the report, save the data as excel file
+```{r}
+intest_clean <- lipid_report_clean(tem=intest, sample_info=c(1:3), lipid_info=c(1:6))
+write.xlsx(intest_clean, paste(filepath,"intest_clean.xlsx", sep=""))
+```
+### Show data, and lipid meta data
+```{r}
+datatable(intest_clean$data, options = list(scrollX = TRUE))
+
+datatable(intest_clean$ids, options = list(scrollX = TRUE))
+```
+
+## Add samples meta data: Type and Day
+```{r}
+intest_data <- intest_clean$data %>% add_column(Type=substr(intest_clean$data$Samples,1,2),Day=substr(intest_clean$data$Samples, 3,4), .after = 3)
+
+```
+```{r}
+datatable(intest_data, options = list(scrollX = TRUE))
+```
+
+
+## Functions to deal with 0 or miss values
+```{r}
+### replace 0 or missing value with 0.5 minimum
+is.zero <- Vectorize(
+  function(x){
+     if (!is.na(x)) {if (x==0) return (TRUE)}
+     return (FALSE)
+  }
+)
+
+###count NA and 0 
+countNA0 <- function(x) {
+  a <- sum(is.na(x))
+  b <- sum(is.zero(x))
+  return (a + b)
+}
+### remove lipid with # of missing
+rmNA <- function(data = intest_data, nonNA = 0.5) {
+  sumNA <- data %>% map_df( ~ countNA0(.x))
+  return (data[, (sumNA / nrow(data)) <= nonNA])
+}
+
+### replace missing value with n minimum
+repNA_nmin <- function(x, n) {
+  #x is vector or list
+  if (countNA0(x) != length(x))
+    x[is.na(x)] <- min(x, na.rm = TRUE) * n
+  return (x)
+}
+
+rep0_nmin <- function(x, n) {
+  #x is vector or list
+  if (countNA0(x) != length(x))
+    x[is.zero(x)] <- min(x[x > 0], na.rm = TRUE) * n
+  return (x)
+}
+
+```
+## Replace missing value, 0 values and log transform
+```{r}
+intest05min <- intest_data %>% rmNA %>% mutate_at(-c(1:5), ~rep0_nmin(.,0.5))
+intest05minlog <- intest05min %>% mutate_if(is.numeric, log)
+
+```
+
+## Data summary: mean±sd
+### Function of summary
+```{r}
+data_summary <- function(data = intest05min, ids = intest_clean$ids) {
+  summary <- data %>% group_by(Type, Day) %>%
+    summarise_if(is.numeric, list(mean = mean, sd = sd)) %>%
+    pivot_longer(-c(1:2), names_to = "summary", values_to = "value") %>%
+    separate(summary, into = c("uniID", "meansd"), sep = "_") %>%
+    pivot_wider(
+      id_cols = c(1:3),
+      names_from = meansd,
+      values_from = value
+    ) %>%
+    mutate(meansd = paste(round(mean, 2), round(sd, 2), sep = " ± ")) %>% 
+    unite("Type_Day", Type, Day) %>%
+    pivot_wider(id_cols = uniID,
+                names_from = Type_Day,
+                values_from = meansd) %>% inner_join(ids, .)
+  
+  return (summary)
+}
+```
+### Summary data and save as excel file
+```{r}
+intest05min_summary <- data_summary(data=intest05min, ids=intest_clean$ids)
+write.xlsx(intest05min_summary, paste0(filepath,"intest05min_summary.xlsx"))
+```
+```{r}
+datatable(intest05min_summary, options = list(scrollX = TRUE))
+```
+
+# Correlation analysis
+
+## Functions of correlation
+```{r}
+### return coefficient and p value for correlation test
+cor_p <- function(...) {
+  re <- cor.test(...)
+  cor_p <- c(re$estimate, p = re$p.value)
+  return (cor_p)
+}
+
+### return coefficients and p values as dataframe
+cor_p_df <-
+  function(data = intest05min,
+           x = "X2",
+           Y = c("X3", "X4"),
+           ids = intest_clean$ids[, c(1:3)]) {
+    df <-
+      map2_df(x, Y, ~ cor_p(data[[.x]], data[[.y]], method = "pearson")) %>%
+      add_column(uniID = Y, .before = 1) %>% inner_join(ids, .)
+    return (df)
+  }
+
+###all, WT, KO correlation
+wt_ko_cor_p <-
+  function (data = intest05min,
+            x = "X2",
+            Y = c("X3", "4") ,
+            ids = intest_clean$ids) {
+    data1 <- data %>% filter(Type == "WT")
+    data2 <- data %>% filter(Type == "KO")
+    all <- cor_p_df(data = data,
+                    x = x,
+                    Y = Y,
+                    ids = ids)
+    WT <- cor_p_df(data = data1,
+                   x = x,
+                   Y = Y,
+                   ids = ids)
+    KO <- cor_p_df(data = data2,
+                   x = x,
+                   Y = Y,
+                   ids = ids)
+    df <-
+      full_join(WT,
+                KO,
+                by = c("uniID", "Class", "ID"),
+                suffix = c("_WT", "_KO")) %>%
+      full_join(all, by = c("uniID", "Class", "ID"))
+    return (df)
+  }
+```
+## Correlation: lipids vs cefoperazon
+```{r}
+intest_cefoperazone <- wt_ko_cor_p(
+  data = intest05min,
+  x = intest_clean$ids$uniID[intest_clean$ids$ID == "Cefoperazone"],
+  Y = names(intest05min)[-c(1:5)],
+  ids = intest_clean$ids[, c(1:3)]
+)
+intest_cefoperazone_sig <-
+  intest_cefoperazone %>% filter(p_WT < 0.05 | p_KO < 0.05 | p < 0.05)
+write.xlsx(intest_cefoperazone_sig,
+           paste0(filepath, "intest_cefoperazone_sig.xlsx"))
+```
+```{r}
+datatable(intest_cefoperazone, options = list(scrollX = TRUE))
+```
+
+# Correlation plot
+## Function of correlation plot
+```{r}
+cor_plot <-
+  function(data = intest05min,
+           xvariable = "Cefoperazone",
+           Y = intest_cefoperazone_sig$uniID,
+           ids = intest_clean$ids) {
+    x <- ids$uniID[ids$ID == xvariable]
+    for (y in Y) {
+      ylab <- ids$ID[ids$uniID == y]
+      #cat(y, " ")
+      topy <- max(data[[y]], na.rm = T)
+      p1 <- ggscatter(data,
+                      x = x,
+                      y = y,
+                      add = "reg.line") +
+        facet_wrap( ~ Type, ncol = 2, scales = "fixed") +
+        stat_cor(label.y = topy * 0.82) +
+        stat_regline_equation(label.y = topy * 0.9) +
+        labs(x = xvariable, y = ylab)
+      
+      p2 <- ggscatter(data,
+                      x = x,
+                      y = y,
+                      add = "reg.line") +
+        facet_wrap( ~ "KO+WT") +
+        stat_cor(label.y = topy * 0.82) +
+        stat_regline_equation(label.y = topy * 0.9) +
+        labs(x = xvariable, y = ylab)
+      
+      #grid.arrange(p2, p1,ncol=2)
+      print(plot_grid(
+        p2,
+        p1,
+        align = "h",
+        nrow = 1,
+        rel_widths = c(1.1 / 3,  1.9 / 3)
+      ))
+    }
+  }
+```
+## Plot the correction and save plot as pdf file
+
+### Show examples
+```{r}
+cor_plot(data=intest05min, xvariable="Cefoperazone",Y=intest_cefoperazone_sig$uniID[1:2], ids=intest_clean$ids)
+```
+
+### save all plots to a pdf file
+```{r}
+#intest Cefoperazone
+pdf(paste0(filepath, "intestine_Cefoperazone_corplot_sig.pdf"), width = 8, height = 4)
+
+cor_plot(data=intest05min, xvariable="Cefoperazone",Y=intest_cefoperazone_sig$uniID, ids=intest_clean$ids)
+
+dev.off()
+```
+
+# Statistic analysis: linear regression
+```{r}
+#########################
+library(lme4)
+library(modelbased)
+```
+
+
+## Group comparison
+
+Compare KO to WT
+```{r}
+intest05minlog$Type <- factor(intest05minlog$Type, levels = c("WT", "KO"))
+```
+
+```{r}
+
+contrasts1 <- c(
+  "KO D0 - KO D1",
+  "KO D0 - KO D3",
+  "KO D0 - KO D5",
+  "WT D0 - WT D1",
+  "WT D0 - WT D3",
+  "WT D0 - WT D5",
+  "WT D0 - KO D0",
+  "WT D1 - KO D1",
+  "WT D3 - KO D3",
+  "WT D5 - KO D5"
+)
+
+```
+
+## Functions of linear regression analysis
+
+### Function to calculate FDR
+```{r}
+fdr <- function(x)p.adjust(x, method="BH") # calculate FDR
+```
+
+### Function of fixed effect
+```{r}
+
+lmfixed <-
+  function(data = intest05minlog,
+           ids = intest_clean$ids,
+           contrasts1 = contrasts1) {
+    re <- list()
+    ratio <- list()
+    for (x in names(data)[-c(1:5)]) {
+      #cat(x, "  ")
+      fml <- paste(x, "~ Type*Day")
+      fml <-  as.formula(fml)
+      fit <- lm(fml, data = data)
+      
+      results <-
+        estimate_contrasts(fit, adjust = "none") %>% data.frame()
+      
+      row.names(results) <-
+        paste(results$Level1, results$Level2, sep = " - ")
+      
+      results1 <- results[contrasts1,]
+      re[[x]]  <- p.adjust(results1$p, method = "BH")
+      ratio[[x]] <- 1 / exp(results1$Difference)
+    }
+    
+    re1 <- do.call(rbind, re) %>% data.frame()
+    ratio1 <- do.call(rbind, ratio) %>% data.frame()
+    names(re1) <- contrasts1
+    names(ratio1) <- paste(contrasts1, "Ratio", sep = ": ")
+    re_fdr <- re1 %>% mutate_all(fdr)
+    
+    names(re_fdr) <- paste(names(re_fdr), "FDR", sep = ": ")
+    names(re1) <- paste(names(re1), "p", sep = ": ")
+    pfdr <- cbind(re1, re_fdr, ratio1) %>% 
+      tibble::rownames_to_column("uniID")
+    
+    pfdr1 <- inner_join(ids, pfdr)
+    
+    return(pfdr1)
+  }
+```
+
+### Function of mixed effect
+```{r}
+lmmixed <-
+  function(data = stool05minlog,
+           ids = stool_clean$ids,
+           contrasts1 = contrasts1) {
+    re <- list()
+    ratio <- list()
+    for (x in names(data)[-c(1:6)]) {
+      #cat(x, "  ")
+      fml <- paste(x, "~ Type*Day + (1|AnimalID)")
+      fml <-  as.formula(fml)
+      fit <- glmer(fml, data = data)
+      
+      results <-
+        estimate_contrasts(fit, adjust = "none") %>% data.frame()
+      row.names(results) <-
+        paste(results$Level1, results$Level2, sep = " - ")
+      results1 <- results[contrasts1,]
+      re[[x]]  <- p.adjust(results1$p, method = "BH")
+      ratio[[x]] <- 1 / exp(results1$Difference)
+    }
+    
+    re1 <- do.call(rbind, re) %>% data.frame()
+    ratio1 <- do.call(rbind, ratio) %>% data.frame()
+    names(re1) <- contrasts1
+    names(ratio1) <- paste(contrasts1, "Ratio", sep = ": ")
+    re_fdr <- re1 %>% mutate_all(fdr)
+    
+    names(re_fdr) <- paste(names(re_fdr), "FDR", sep = ": ")
+    names(re1) <- paste(names(re1), "p", sep = ": ")
+    pfdr <-
+      cbind(re1, re_fdr, ratio1) %>% tibble::rownames_to_column("uniID")
+    
+    pfdr1 <- inner_join(ids, pfdr)
+    
+    return(pfdr1)
+  }
+```
+
+## Fixed effect analysis and save result as excel file
+```{r}
+intest_re <- lmfixed(data = intest05minlog,
+                     ids = intest_clean$ids,
+                     contrasts1 = contrasts1)
+```
+Save result to excel file
+```{r}
+write.xlsx(intest_re, paste0(filepath,"intest_lm_stat.xlsx"))
+```
+Show first 5 rows
+```{r}
+datatable(intest_re, options = list(scrollX = TRUE))
+```
+
+# Volcanoplot
+## Function of volcanoplot
+```{r}
+library(ggrepel)
+volcanoplotfdr <-
+  function(pfc,
+           title = "volcanoplot",
+           fccutoff = 2,
+           label = "labelsig",
+           labelsize = 3,
+           pointsize = 1,
+           pcutoff = 0.05,
+           fdrcutoff = 2) {
+    names(pfc)[1:4] <- c("analytes", "pvalue", "ratio", "fdr")
+    
+    lowestp <- min(pfc$pvalue[pfc$pvalue > 0])
+    pfc$pvalue[pfc$pvalue == 0] <- min(lowestp, 1e-30)
+    
+    pfc[, "colgroup"] <- "black"
+    pfdrcut <- pfc$pvalue  < pcutoff & pfc$fdr < fdrcutoff
+    pfdrratio_p <-  pfdrcut & pfc$ratio >= fccutoff
+    pfdrratio_n <-  pfdrcut & pfc$ratio <= 1 / fccutoff
+    
+    pfc[pfdrcut, "colgroup"] <- "orange"
+    pfc[pfdrratio_p, "colgroup"] <- "red"
+    pfc[pfdrratio_n, "colgroup"] <- "green"
+    pfc$colgroup <- as.factor(pfc$colgroup)
+    
+    changed <-
+      c(
+        total = nrow(pfc),
+        increase = nrow(pfc[pfc$colgroup == "red", ]),
+        decrease = nrow(pfc[pfc$colgroup == "green", ])
+      )
+    
+    changed <- paste(changed, collapse = ":")
+    
+    
+    p <- ggplot(data = pfc, aes(log(ratio, 2),-log(pvalue, 10))) +
+      theme_bw() +
+      geom_point(
+        size = pointsize,
+        alpha = ifelse(pfc$colgroup == "black", 1, 1),
+        color = pfc$colgroup
+      ) +
+      geom_hline(yintercept = -log10(pcutoff),
+                 lty = 3,
+                 lwd = 0.5) +
+      geom_vline(xintercept = log2(fccutoff) ,
+                 lty = 3,
+                 lwd = 0.5) +
+      geom_vline(xintercept = log2(1 / fccutoff),
+                 lty = 3,
+                 lwd = 0.5) +
+      labs(x = "log2(Ratio)", y = "-log10(p value)") +
+      ggtitle(paste(title, changed)) +
+      theme(plot.title = element_text(
+        color = "black",
+        face = "bold",
+        size = 12,
+        hjust = 0
+      )) +
+      theme(axis.title = element_text(
+        color = "black",
+        face = "bold",
+        size = 12
+      )) +
+      theme(plot.margin = unit(c(2, 2, 2, 2), "line"))
+    if (label == "labelsig") {
+      p + geom_text_repel(
+        aes(label = substr(analytes, 1, 25)),
+        segment.size = 0.06,
+        min.segment.length = 0,
+        max.overlaps = 100,
+        data = subset(pfc, colgroup == "red" |
+                        colgroup == "green"),
+        size = labelsize
+      )
+      
+    } else if (label == "nolabel")
+    {
+      p
+    } else if (label == "labelall") {
+      p + geom_text_repel(aes(label = analytes), size = labelsize)
+      
+    }
+  }
+```
+
+## Read the statistical results
+```{r}
+intestpfdr <- read.xlsx(paste0(filepath,"intest_lm_stat.xlsx"))
+```
+
+## Save  plot to a pdf file
+```{r}
+tem <- intestpfdr
+pdf(paste0(filepath,"intestine_volcanoplot.pdf"), width = 7, height=6)
+### KO
+pfc <- tem[, c("ID", "KO.D0.-.KO.D1:.p", "KO.D0.-.KO.D1:.Ratio", "KO.D0.-.KO.D1:.FDR")]
+p1 <- volcanoplotfdr(pfc,title="KO.D0.-.KO.D1",fccutoff=1.2, label="labelsig",labelsize=3,pointsize=1, pcutoff=0.05, fdrcutoff=2)
+p1
+
+pfc <- tem[, c("ID", "KO.D0.-.KO.D3:.p", "KO.D0.-.KO.D3:.Ratio", "KO.D0.-.KO.D3:.FDR")]
+p2 <- volcanoplotfdr(pfc,title="KO.D0.-.KO.D3",fccutoff=1.2, label="labelsig",labelsize=3,pointsize=1, pcutoff=0.05, fdrcutoff=2)
+p2
+
+pfc <- tem[, c("ID", "KO.D0.-.KO.D5:.p", "KO.D0.-.KO.D5:.Ratio", "KO.D0.-.KO.D5:.FDR")]
+p3 <- volcanoplotfdr(pfc,title="KO.D0.-.KO.D5",fccutoff=1.2, label="labelsig",labelsize=3,pointsize=1, pcutoff=0.05, fdrcutoff=2)
+p3
+
+#### WT
+pfc <- tem[, c("ID", "WT.D0.-.WT.D1:.p", "WT.D0.-.WT.D1:.Ratio", "WT.D0.-.WT.D1:.FDR")]
+p4<- volcanoplotfdr(pfc,title="WT.D0.-.WT.D1",fccutoff=1.2, label="labelsig",labelsize=3,pointsize=1, pcutoff=0.05, fdrcutoff=2)
+p4
+
+pfc <- tem[, c("ID", "WT.D0.-.WT.D3:.p", "WT.D0.-.WT.D3:.Ratio", "WT.D0.-.WT.D3:.FDR")]
+p5 <- volcanoplotfdr(pfc,title="WT.D0.-.WT.D3",fccutoff=1.2, label="labelsig",labelsize=3,pointsize=1, pcutoff=0.05, fdrcutoff=2)
+p5
+pfc <- tem[, c("ID", "WT.D0.-.WT.D5:.p", "WT.D0.-.WT.D5:.Ratio", "WT.D0.-.WT.D5:.FDR")]
+p6 <- volcanoplotfdr(pfc,title="WT.D0.-.WT.D5",fccutoff=1.2, label="labelsig",labelsize=3,pointsize=1, pcutoff=0.05, fdrcutoff=2)
+p6
+
+#### WT vs KO
+pfc <- tem[, c("ID", "WT.D0.-.KO.D0:.p", "WT.D0.-.KO.D0:.Ratio", "WT.D0.-.KO.D0:.FDR")]
+p7 <- volcanoplotfdr(pfc,title="WT.D0.-.KO.D0",fccutoff=1.2, label="labelsig",labelsize=3,pointsize=1, pcutoff=0.05, fdrcutoff=2)
+p7
+
+pfc <- tem[, c("ID", "WT.D1.-.KO.D1:.p", "WT.D1.-.KO.D1:.Ratio", "WT.D1.-.KO.D1:.FDR")]
+p8 <- volcanoplotfdr(pfc,title="WT.D1.-.KO.D1",fccutoff=1.2, label="labelsig",labelsize=3,pointsize=1, pcutoff=0.05, fdrcutoff=2)
+p8
+
+pfc <- tem[, c("ID", "WT.D3.-.KO.D3:.p", "WT.D3.-.KO.D3:.Ratio", "WT.D3.-.KO.D3:.FDR")]
+p9 <- volcanoplotfdr(pfc,title="WT.D3.-.KO.D3",fccutoff=1.2, label="labelsig",labelsize=3,pointsize=1, pcutoff=0.05, fdrcutoff=2)
+p9
+
+pfc <- tem[, c("ID", "WT.D5.-.KO.D5:.p", "WT.D5.-.KO.D5:.Ratio", "WT.D5.-.KO.D5:.FDR")]
+p10 <- volcanoplotfdr(pfc,title="WT.D5.-.KO.D5",fccutoff=1.2, label="labelsig",labelsize=3,pointsize=1, pcutoff=0.05, fdrcutoff=2)
+p10
+dev.off()
+```
+## Show volcanoplots
+```{r}
+p1
+p2
+p3
+p4
+p5
+p6
+p7
+p8
+p9
+p10
+```
+
+
+# Point errobar plots
+## Function of point errorbar plots
+```{r}
+point_errorbar_plot <-
+  function(data = intest05min,
+           analytes = names(intest05min)[c(6:7)],
+           ids = intest_clean$ids) {
+    for (analyte in analytes) {
+      title <- ids$ID[ids$uniID == analyte]
+      p <- ggplot(data, aes(Day, get(analyte))) +
+        facet_wrap( ~ Type) +
+        theme_classic() +
+        geom_point(alpha = 0.5) +
+        stat_summary(
+          fun.data = "mean_sdl",
+          fun.args = list(mult = 1),
+          geom = "errorbar",
+          width = 0.4,
+          position = position_dodge(0.6)
+        ) +
+        stat_summary(
+          aes(y = get(analyte)),
+          fun = "mean",
+          geom = "point",
+          shape = 4,
+          position = position_dodge(0.6)
+        ) +
+        labs(y = "Intensity", x = "Day", title = title) +
+        theme(
+          axis.title = element_text(size = 10),
+          axis.text = element_text(size = 10),
+          axis.text.x = element_text(angle = 0)
+        ) +
+        theme(plot.title = element_text(size = 7))
+      
+      print(p)
+    }
+    
+  }
+```
+
+## Plot point errorbar plots
+
+Show examples
+```{r}
+point_errorbar_plot(data = intest05min,
+                    analytes = names(intest05min)[-c(1:5)][1:2],
+                    ids = intest_clean$ids)
+```
+
+Save plots to pdf file
+```{r}
+pdf(paste0(filepath,"intest05min_errorbar.pdf"),width=3.5,height=2.6)
+point_errorbar_plot(data = intest05min,
+                    analytes = names(intest05min)[-c(1:5)],
+                    ids = intest_clean$ids)
+dev.off()
+```
+
+# Heat map
+```{r}
+library(gplots)
+library(RColorBrewer)
+```
+
+## Prepare data for heatmap
+```{r}
+colors <- brewer.pal(9, "Set1")
+names(colors) <- unique(intest_clean$ids$Class)
+toMean <- function(x) x/mean(x, na.rm=TRUE)
+
+prepheatmap <- function(data=intest05min, ids=intest_clean$ids){
+  
+  labrow <- left_join(data.frame(uniID=names(data)[-c(1:5)]),ids)
+  toMean1 <- data[data$Type=="KO" ,] %>% mutate_at(-c(1:5),list(toMean))
+  toMean2 <- data[data$Type=="WT" ,] %>% mutate_at(-c(1:5),list(toMean))
+  toMean12 <- rbind(toMean1,toMean2)
+  
+  return (list(data=toMean12, labrow=labrow))
+}
+```
+
+## Save heatmap to pdf file
+```{r, fig.width=11, fig.height=8}
+intest_hp <- prepheatmap(data=intest05min, ids=intest_clean$ids)
+toMean12 <- intest_hp$data
+labrow <- intest_hp$labrow
+names(colors) <- unique(intest_clean$ids$Class)
+#pdf(paste0(filepath, "intestine_KO(tomean)_WT(tomean)_heatmap_color.pdf"), width = 10,height = 10)
+heatmap.2(as.matrix(t(log(toMean12[,-c(1:5)]))),col=bluered, Rowv = F, Colv = FALSE, margins = c(4, 15),
+          labCol=toMean12$Sample,labRow = labrow$ID ,trace="none",
+          dendrogram="none",
+          lhei = c(1,6),
+          main = "Intestine",
+          RowSideColors=colors[labrow$Class], 
+          na.color = "grey",srtCol=90, cexCol = 0.8, cexRow = 0.5, key.xlab = "log(toMean)",
+          density.info="none",breaks = seq(-1, 1, 0.1))
+legend("left", legend = names(colors)[-9],fill = colors,title = "Class", cex = 0.7)
+#dev.off()
+
+```
+
+
+
+
+
+
