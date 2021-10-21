@@ -1,0 +1,338 @@
+---
+title: "Data analysis"
+author: "Zhijun Cao"
+date: "7/15/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = TRUE, message =  TRUE)
+```
+
+## Descfription
+
+This document provides R source code for data analyis of the submitted manuscript. 
+
+
+```{r}
+library(openxlsx)
+library(mixOmics)
+library(tidyr)
+library(dplyr)
+library(magrittr)
+library(tibble)
+library(sva)
+library(gridExtra)
+library(ggplot2)
+library(plotly)
+library(purrr)
+library(multcomp)
+```
+
+## Import data
+```{r}
+lipid <- read.xlsx("lipid_sample-02132020-2.xlsx")
+aa <- read.xlsx("AA_sample-02132020.xlsx")
+```
+## PCA analysis to identify batch effects
+```{r}
+lipid_pca <- pca(log(lipid[,-(1:6)]), scale=T, ncomp=2)
+aa_pca <- pca(log(aa[,-(1:6)]), scale=T, ncomp=2)
+```
+
+```{r}
+p1 <- plotIndiv(lipid_pca, group=lipid$Batch, pch=as.factor(lipid$Group), legend = TRUE, ind.names=F, title = "lipids: before correction")
+p2 <- plotIndiv(aa_pca,  group=aa$Batch, pch=as.factor(aa$Group), legend = TRUE, ind.names=F, title = "AAs: before correction")
+```
+
+## Empirical Bayes method for batch correction
+### lipids
+```{r}
+lipid_pheno <- lipid[,c(1:6)]
+lipid_data  <-  log(t(as.matrix(lipid[,-c(1:6)])))
+colnames(lipid_data) <- lipid_pheno$SampleID
+lipid_mod = model.matrix(~as.factor(Group), data=lipid_pheno)
+
+lipid_combat = ComBat(dat=lipid_data, batch=lipid_pheno$Batch, mod=lipid_mod, par.prior=TRUE, ref.batch="b2", prior.plots=FALSE)
+lipid_combat_df <- cbind(lipid_pheno, data.frame(t(lipid_combat)))
+
+write.xlsx(lipid_combat_df, "loglipid_combat.xlsx")
+```
+
+### AAs
+```{r}
+aa_pheno <- aa[,c(1:6)]
+aa_data  <-  log(t(as.matrix(aa[,-c(1:6)])))
+colnames(aa_data) <- aa_pheno$SampleID
+aa_mod = model.matrix(~as.factor(Group), data=aa_pheno)
+
+aa_combat = ComBat(dat=aa_data, batch=aa_pheno$Batch, mod=aa_mod, par.prior=TRUE, ref.batch="b2", prior.plots=FALSE)
+aa_combat_df <- cbind(aa_pheno, data.frame(t(aa_combat)))
+
+write.xlsx(aa_combat_df, "logaa_combat.xlsx")
+```
+
+### PCA analysis after batch correction
+```{r}
+lipid_combat_df_pca <- pca(lipid_combat_df[,-(1:6)], scale=T, ncomp=2)
+aa_combat_df_pca <- pca(aa_combat_df[,-(1:6)], scale=T, ncomp=2)
+```
+
+```{r}
+p3 <- plotIndiv(lipid_combat_df_pca, group=lipid$Batch, pch=as.factor(lipid$Group), legend = TRUE, ind.names=F, title = "lipids: after correction")
+p4 <- plotIndiv(aa_combat_df_pca,  group=aa$Batch, pch=as.factor(aa$Group), legend = TRUE, ind.names=F, title = "AAs: after correction")
+```
+
+### PCA plots before and after batch correction
+```{r}
+pdf("Before and after batch correction.pdf", width = 16, height = 11)
+grid.arrange(p1$graph, p3$graph, p2$graph, p4$graph, nrow=2)
+dev.off()
+```
+
+## PCA and PLSDA analysis for each time point
+
+###function for pca analysis
+```{r}
+pca_analysis <- function(title="PND30", tem=tem, colors=colors){
+  
+tem_pca <- pca(tem[,-(1:6)], scale = TRUE, ncomp = 3)
+
+write.xlsx(data.frame(tem_pca$explained_variance), paste(title," pca results.xlsx"), rowNames=T)  
+  
+  
+#3d pca
+
+p <- plot_ly(data.frame(tem_pca$variates$X), x = ~PC1, y = ~PC2, z = ~PC3, color = ~tem$Treatment, colors = colors) %>%
+ add_markers() %>%
+  layout(scene = list(xaxis = list(title = 'PC1'),
+                      yaxis = list(title = 'PC2'),
+                      zaxis = list(title = 'PC3')))
+p
+htmlwidgets::saveWidget(as_widget(p), paste(title," pca_3d.html", sep=""))
+
+#variable correlation and loading
+pdf(paste(title, "pca_correlation and loading.pdf"),width=14, height=14)
+plotVar(tem_pca, comp=c(1,2), cex=4)
+plotVar(tem_pca, comp=c(1,3), cex=4)
+plotVar(tem_pca, comp=c(2,3), cex=4)
+
+plotLoadings(tem_pca,comp=1, size.name = 0.3, ndisplay = 100)
+plotLoadings(tem_pca,comp=2, size.name = 0.3, ndisplay = 100)
+plotLoadings(tem_pca,comp=3, size.name = 0.3, ndisplay = 100)
+
+dev.off()
+
+}
+```
+
+###function for plsda analysis
+```{r}
+plsda_analysis <- function(title="PND30", tem=tem, colors=colors){
+  
+tem_plsda <- plsda(tem[,-(1:6)],tem$Group, scale = TRUE, ncomp = 3)
+perf_plsda <- perf(tem_plsda, validation = "loo", progressBar = FALSE, auc = TRUE)
+write.xlsx(list(explained=data.frame(tem.plsda$explained_variance),
+           validatonerror=perf_plsda$error.rate$BER), paste(title," plsda results.xlsx"), rowNames=T)  
+  
+  
+#3d plsda
+
+p <- plot_ly(data.frame(tem_plsda$variates$X), x = ~comp1, y = ~comp2, z = ~comp3, color = ~tem$Treatment, colors = colors) %>%
+  add_markers() %>%
+  layout(scene = list(xaxis = list(title = 'X−variate 1'),
+                      yaxis = list(title = 'X−variate 2'),
+                      zaxis = list(title = 'X−variate 3')))
+p
+htmlwidgets::saveWidget(as_widget(p), paste(title," plsda_3d.html", sep=""))
+
+#variable correlation and loading
+pdf(paste(title, "plsda_correlation and loading.pdf"), width=14, height=14)
+plotVar(tem_plsda, comp=c(1,2), cex=4)
+plotVar(tem_plsda, comp=c(1,3), cex=4)
+plotVar(tem_plsda, comp=c(2,3), cex=4)
+
+plotLoadings(tem_plsda,comp=1,method='median', contrib="max", size.legend = 0.5, size.name = 0.3, ndisplay = 100 )
+plotLoadings(tem_plsda,comp=2,method='median', contrib="max", size.legend = 0.5, size.name = 0.3, ndisplay = 100 )
+plotLoadings(tem_plsda,comp=3,method='median', contrib="max", size.legend = 0.5, size.name = 0.3, ndisplay = 100 )
+dev.off()
+}
+```
+
+####PCA and PLSDA analysis for lipids
+
+```{r}
+lipid_combat_df <- lipid_combat_df %>% filter(Animal.ID!=583)
+```
+
+```{r}
+tem <- lipid_combat_df %>% filter(PND=="PND 30")
+tem$Treatment <- factor(tem$Treatment, levels = c('CTRL', 'EB-treated'))
+colors <- c('black', 'red')
+plsda_analysis(title="Lipid PND30", tem=tem, colors=colors)
+pca_analysis(title="Lipid PND30", tem=tem, colors=colors)
+```
+
+```{r}
+tem <- lipid_combat_df %>%  filter(PND=="PND 90")
+tem$Treatment <- factor(tem$Treatment, levels = c('CTRL', 'EB-treated'))
+colors <- c('black', 'red')
+plsda_analysis(title="Lipid PND90", tem=tem, colors=colors)
+pca_analysis(title="Lipid PND90", tem=tem, colors=colors)
+```
+
+```{r}
+tem <- lipid_combat_df %>% filter(PND=="PND 100")
+tem$Treatment <- factor(tem$Treatment, levels = c('CTRL', 'EB only', 'T+E only', 'EB+T+E'))
+colors <- c('black', 'red', 'green', 'purple')
+plsda_analysis(title="Lipid PND100", tem=tem, colors=colors)
+pca_analysis(title="Lipid PND100", tem=tem, colors=colors)
+```
+
+```{r}
+tem <- lipid_combat_df %>% filter(PND=="PND 145")
+tem$Treatment <- factor(tem$Treatment, levels = c('CTRL', 'EB only', 'T+E only', 'EB+T+E'))
+colors <- c('black', 'red', 'green', 'purple')
+plsda_analysis(title="Lipid PND145", tem=tem, colors=colors)
+pca_analysis(title="Lipid PND145", tem=tem, colors=colors)
+```
+
+```{r}
+tem <- lipid_combat_df %>% filter(PND=="PND 200")
+tem$Treatment <- factor(tem$Treatment, levels = c('CTRL', 'EB only', 'T+E only', 'EB+T+E'))
+colors <- c('black', 'red', 'green', 'purple')
+plsda_analysis(title="Lipid PND200", tem=tem, colors=colors)
+pca_analysis(title="Lipid PND200", tem=tem, colors=colors)
+```
+
+####PCA and PLSDA analysis for amino acids
+```{r}
+tem <- aa_combat_df %>% filter(PND=="PND 30")
+tem$Treatment <- factor(tem$Treatment, levels = c('CTRL', 'EB-treated'))
+colors <- c('black', 'red')
+plsda_analysis(title="AA PND30", tem=tem, colors=colors)
+pca_analysis(title="AA PND30", tem=tem, colors=colors)
+```
+
+```{r}
+tem <- aa_combat_df %>% filter(PND=="PND 90")
+tem$Treatment <- factor(tem$Treatment, levels = c('CTRL', 'EB-treated'))
+colors <- c('black', 'red')
+plsda_analysis(title="AA PND90", tem=tem, colors=colors)
+pca_analysis(title="AA PND90", tem=tem, colors=colors)
+```
+
+```{r}
+tem <- aa_combat_df %>% filter(PND=="PND 100")
+tem$Treatment <- factor(tem$Treatment, levels = c('CTRL', 'EB only', 'T+E only', 'EB+T+E'))
+colors <- c('black', 'red', 'green', 'purple')
+plsda_analysis(title="AA PND100", tem=tem, colors=colors)
+pca_analysis(title="AA PND100", tem=tem, colors=colors)
+```
+
+```{r}
+tem <- aa_combat_df %>% filter(PND=="PND 145")
+tem$Treatment <- factor(tem$Treatment, levels = c('CTRL', 'EB only', 'T+E only', 'EB+T+E'))
+colors <- c('black', 'red', 'green', 'purple')
+plsda_analysis(title="AA PND145", tem=tem, colors=colors)
+pca_analysis(title="AA PND145", tem=tem, colors=colors)
+```
+
+```{r}
+tem <- aa_combat_df %>% filter(PND=="PND 200")
+tem$Treatment <- factor(tem$Treatment, levels = c('CTRL', 'EB only', 'T+E only', 'EB+T+E'))
+colors <- c('black', 'red', 'green', 'purple')
+plsda_analysis(title="AA PND200", tem=tem, colors=colors)
+pca_analysis(title="AA PND200", tem=tem, colors=colors)
+```
+
+## Boxplot
+
+```{r}
+Boxplots <- function(pdfname="loglipid_combat_boxplot_fill.pdf", data=data){
+  level=c( "PND 30 CTRL", "PND 30 EB-treated",
+          "PND 90 CTRL", "PND 90 EB-treated",
+          "PND 100 CTRL", "PND 100 EB only", "PND 100 T+E only", "PND 100 EB+T+E", 
+          "PND 145 CTRL", "PND 145 EB only",  "PND 145 T+E only", "PND 145 EB+T+E",  
+          "PND 200 CTRL", "PND 200 EB only", "PND 200 T+E only", "PND 200 EB+T+E" 
+          )
+data$Group <-factor(data$Group, levels = level)
+data$PND <-factor(data$PND, levels = c("PND 30","PND 90", "PND 100", "PND 145", "PND 200"))
+analytes <- names(data)[-c(1:6)]
+pdf(pdfname, width = 6, height = 5)
+for (analyte in analytes){
+  p <- ggplot(data, aes(Group, get(analyte), fill=PND))+
+  theme_bw()+ 
+  geom_boxplot()+
+  labs(y=analyte)+
+  theme(axis.title=element_text(size=10),axis.text=element_text(size=10),axis.text.x=element_text(angle=90))+
+  theme(plot.title=element_text(size=14))+
+  theme(plot.margin=unit(c(1,1,1,1),"line"))
+  print(p)
+}
+dev.off()
+}
+```
+
+### Lipids boxplot
+```{r}
+Boxplots(pdfname="lipid_combat_boxplot_fill.pdf", data=lipid_combat_df)
+```
+
+### Amino acid boxplot
+```{r}
+Boxplots(pdfname="aa_combat_boxplot_fill.pdf", data=aa_combat_df)
+```
+
+## Statistical analysis
+```{r}
+aov_dunn <- function(excelname="lipid_combat_ratio_pvalue_fdr.xlsx", data=lipid_combat_df){
+  
+  Mean <- function(x)mean(x, na.rm=TRUE)
+  ratio <- function(x)exp(x-x[1])
+  
+  data$Treatment <- factor(data$Treatment)
+  PND<- unique(data$PND)
+  analytes <- names(data)[-c(1:6)]
+  pnd_re <- list()
+
+  for (pnd in PND) {
+  
+    tem <- data %>% filter(PND==pnd)
+    ratio_re <- tem %>% select(-Animal.ID)%>% group_by(Group) %>% summarise_if(is.numeric,Mean) %>% 
+      mutate_if(is.numeric, ratio)
+    ratio_re_df <- data.frame(t(as.matrix(ratio_re[,-1]))) %>% select(-1)
+  
+    pvalues <- list()
+    
+    for (x in analytes){
+      m1 <- aov(tem[,x] ~ Treatment, data=tem)
+      re <- glht(m1, linfct=mcp(Treatment="Dunnett"))
+      sum_re_pvalue <- summary(re)$test$pvalues
+      names(sum_re_pvalue) <- names(coefficients(re))
+      pvalues[[x]] <- sum_re_pvalue
+    }
+    
+    df_re <- data.frame(do.call(rbind, pvalues))
+    fdr_re <- map_df(df_re, ~p.adjust(.x, method="BH"))
+    names(fdr_re) <- paste(names(df_re), " FDR")
+    names(ratio_re_df) <- paste(names(df_re), " Ratio")
+    ratio_re_df <- ratio_re_df %>% rownames_to_column(var="analytes")
+    names(df_re) <- paste(names(df_re), "p value")
+    pnd_re[[pnd]] <- cbind(ratio_re_df, df_re, fdr_re)
+}
+
+write.xlsx(pnd_re, excelname ,rownames=TRUE)
+}
+
+```
+
+### Lipid stat analysis
+```{r}
+aov_dunn(excelname="ipid_combat_ratio_pvalue_fdr.xlsx", data=lipid_combat_df)
+```
+
+### Amino acid stat analyis
+```{r}
+aov_dunn(excelname="aa_combat_ratio_pvalue_fdr.xlsx", data=aa_combat_df)
+```
