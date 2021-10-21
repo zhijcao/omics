@@ -1,0 +1,340 @@
+library(tidyverse)
+library(openxlsx)
+library(gridExtra)
+rm(list=ls())
+IDs<- read.xlsx("C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/1-s2.0-S0092867420306279-mmc1.xlsx", sheet = "IDs")
+
+IDs <- IDs[,c(3,5)]
+
+meta <- read.xlsx("C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/1-s2.0-S0092867420306279-mmc2.xlsx", sheet = "meta")
+train <- read.xlsx("C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/1-s2.0-S0092867420306279-mmc2.xlsx", sheet = "Proteomics_proteins_training")
+test <- read.xlsx("C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/1-s2.0-S0092867420306279-mmc2.xlsx", sheet = "Proteomics_proteins_test")
+
+repNAwithmin <- function(x){
+  x[is.na(x)] <- min(x,na.rm = TRUE)
+  return (x)
+}
+
+repNAwithmin05 <- function(x){
+  x[is.na(x)] <- min(x,na.rm = TRUE)*0.5
+  return (x)
+}
+
+meta1 <- meta %>% mutate_if(is.numeric, repNAwithmin) %>% mutate_if(is.numeric,log2)
+meta <- meta1
+write.xlsx(meta, "C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/meta_NAtominlog2.xlsx")
+meta <- read.xlsx("C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/meta_NAtominlog2.xlsx")
+
+rownames(train) <- train$Proteins
+prot <- t(train[,-c(1:2)]) %>% data.frame() %>% rownames_to_column("MSID")
+
+prot_data <- inner_join(IDs, prot)%>% mutate_if(is.numeric, repNAwithmin05)
+write.xlsx(prot_data, "C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/Proteomics_proteins_trainingNAtomin05.xlsx")
+prot_data <- read.xlsx("C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/Proteomics_proteins_trainingNAtomin05.xlsx")
+
+proteins <- names(prot_data)[-c(1:2)]
+pro_nonSevere <- prot_data %>% filter(Status=="nonSevere")
+pro_Severe <- prot_data %>% filter(Status=="Severe")
+
+#protein <- proteins[1]
+prot_ttest <- list()
+for (protein in proteins){
+  tem <- t.test(pro_nonSevere[[protein]],pro_Severe[[protein]])
+  prot_ttest[[protein]] <- c(fc=(tem$estimate[["mean of y"]]/tem$estimate[["mean of x"]]), pvalue=tem$p.value)
+}
+prot_ttest_df <- do.call(rbind, prot_ttest) %>% data.frame() %>% rownames_to_column("analytes")
+prot_ttest_df[, "FDR"] <- p.adjust(prot_ttest_df$pvalue, method = "BH")
+write.xlsx(prot_ttest_df, "C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/protNAtomin05_SevereVsnonSevere.xlsx")
+
+
+Median <- function(x)median(x, na.rm = T)
+Mean <- function(x)mean(x, na.rm = TRUE)
+SD<- function(x)sd(x, na.rm = TRUE)
+CV <- function(x)sd(x, na.rm = TRUE)/mean(x, na.rm = TRUE)*100
+#n <- function(x)n(x)
+###proteomics
+prot_sum <- prot_data %>% select(-MSID) %>% group_by(Status) %>% 
+  summarise_all(list(Mean=Mean, SD=SD))
+
+prot_cv <- prot_data %>% select(-MSID) %>% group_by(Status) %>% 
+  summarise_all(list(CV)) %>% 
+  pivot_longer(-Status, names_to="protein", values_to="CV")
+
+prot_cv_sum <-prot_cv %>% group_by(Status)%>% summarise_if(is.numeric, list(Median=Median,Mean=Mean))
+
+write.xlsx(list(prot_sum=prot_sum, prot_cv=prot_cv,prot_cv_sum=prot_cv_sum),"C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/prot_sum.xlsx")
+prot_sum <- read.xlsx("C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/prot_sum.xlsx",
+                      sheet = "prot_sum")
+
+dim(prot_data)
+table(prot_data$Status)
+ptitle <-" Healthy: 28, nonCOVID19: 25, nonSevere:37, Severe:28"
+p1a <- ggplot(prot_cv, aes("Group", CV, fill=Status))+
+  geom_boxplot()+
+  labs(x="", y="Proteins: CV", fill="Group", title=ptitle)
+#coord_flip()
+
+p2a <- ggplot(prot_cv, aes(CV, fill=Status))+
+  geom_histogram(binwidth=2, alpha=0.6, position="identity")+
+  labs(x="Proteins: CV", title=ptitle, fill="Group")
+
+pdf("C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/prot_cv_plot.pdf")
+grid.arrange(p1a,p2a,nrow=2)
+dev.off()
+
+####metabolite
+meta_sum <- meta %>% select(-Metabolites) %>% group_by(Group) %>% 
+  summarise_all(list(Mean=Mean, SD=SD))
+
+meta_cv <- meta %>% select(-Metabolites) %>% group_by(Group) %>% 
+  summarise_all(list(CV)) %>% 
+  pivot_longer(-Group, names_to="metabolites", values_to="CV")
+Median <- function(x)median(x, na.rm = T)
+meta_cv_sum <-meta_cv %>% group_by(Group)%>% summarise_if(is.numeric, list(Median=Median,Mean=Mean))
+
+
+
+write.xlsx(list(meta_sum=meta_sum, meta_cv=meta_cv,meta_cv_sum=meta_cv_sum),"C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/metalog2_cv.xlsx")
+meta_sum <- read.xlsx("C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/metalog2_cv.xlsx",
+                      sheet="meta_sum")
+
+table(meta$Group)
+mtitle <-"Healthy: 25, nonCOVID19: 25, nonSevere:25, Severe:21"
+p1 <- ggplot(meta_cv, aes("group", CV, fill=Group))+
+  geom_boxplot(show.legend=T)+
+  labs(x="", y="Metabolites: CV", title=mtitle)
+  #coord_flip()
+
+p2 <- ggplot(meta_cv, aes(CV, fill=Group))+
+  geom_histogram(binwidth=2, alpha=0.6, position="identity")+
+  labs(x="Metabolites: CV", title=mtitle)
+
+pdf("C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/prot_metalog2_cv_plot.pdf",12, 9)
+grid.arrange(p1a,p1,p2a, p2,nrow=2)
+dev.off()
+
+#############################
+###power analysis
+#############################
+library(pwr)
+unbalancedANOVA <- function(k=k, n=n, a=0.05, gm=gm, gsd=gsd){
+  # k group number, 
+  #n: sample sizes for each group
+  #gm: group means
+  #gsd: group stds
+  
+  sig2 <- sum((n-1)*gsd^2)/sum(n-1)
+  lambda <- sum(n*(gm-mean(gm))^2)/sig2
+  delta <- sqrt((sum((gm-mean(gm))^2)/k)/sig2)
+  power <- 1-pf(qf(1-a, k-1, sum(n-1)), k-1, sum(n-1), lambda)
+  return (c(totalSample=sum(n),lambda=lambda,delta=delta, alpha=a, power=power))
+}
+#############################
+
+
+library(pwr)
+soma_power <- pwr.t2n.test(n1 = 34, n2= 38, d = 0.67, sig.level = 0.05, power =NULL,
+             alternative = c("two.sided"))
+soma_power
+
+# expected minimal detectable effect 0.67 (medium-large)
+
+0.2/0.67
+0.8087121/2
+                             
+0.6954366/2
+pwr.t2n.test(n1 = 50, n2= 25, d = NULL, sig.level = 0.05, power =0.8,
+             alternative = c("two.sided"))
+
+
+pwr.t2n.test(n1 = 20, n2= 20, d = NULL, sig.level = 0.05, power =0.8,
+             alternative = c("two.sided"))
+
+0.9091587/2
+
+pwr.t2n.test(n1 = 30, n2= 30, d = NULL, sig.level = 0.05, power =0.8,
+             alternative = c("two.sided"))
+
+0.7356292/2
+pwr.anova.test(k = 2, n = 30, f = NULL, sig.level = 0.05, power = 0.8)
+
+proteins <- names(prot_data)[-c(1:2)]
+proteins_Mean <- paste(proteins, "_Mean", sep="")
+proteins_SD <- paste(proteins, "_SD", sep="")
+
+length(proteins)
+prot_power <- list()
+#protein <- proteins[1]
+analyte<- analytes[1]
+cal_power <- function(analytes=names(prot_data)[-c(1:2)], data=prot_sum,k=4, n=c(24,24,24,24),a=0.05){
+  power <- list()
+  for (analyte in analytes){
+    Mean <- paste(analyte, "_Mean", sep="")
+    SD <- paste(analyte, "_SD", sep="")
+    gm <- data[[Mean]]
+    gsd <- data[[SD]]
+    power[[analyte]] <- unbalancedANOVA(k=k,n=n, a=a, gm=gm, gsd=gsd)
+  }
+  power_df<- do.call(rbind, power) %>% data.frame() %>% rownames_to_column("analytes")
+  
+  return(power_df)
+}
+
+### 4 group
+prot_power <- cal_power(analytes=names(prot_data)[-c(1:2)], data=prot_sum,k=4, n=c(24,24,24,24),a=0.05) 
+meta_power <- cal_power(analytes=names(meta)[-c(1:2)], data=meta_sum,k=4, n=c(24,24,24,24),a=0.05) 
+write.xlsx(list(meta_power=meta_power,prot_power=prot_power),
+           "C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/prot_met_power4x24.xlsx")
+
+prot_power <- cal_power(analytes=names(prot_data)[-c(1:2)], data=prot_sum,k=4, n=c(50,20,20,20),a=0.05) 
+meta_power <- cal_power(analytes=names(meta)[-c(1:2)], data=meta_sum,k=4, n=c(50,20,20,20),a=0.05) 
+write.xlsx(list(meta_power=meta_power,prot_power=prot_power),
+           "C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/prot_met_power 1x50 and 3x20.xlsx")
+
+### 3 group
+prot_sum1$Status
+prot_sum1 <- prot_sum %>% filter(Status!="nonCOVID19")
+prot_power <- cal_power(analytes=names(prot_data)[-c(1:2)], data=prot_sum1,k=3, n=c(24,24,24),a=0.05) 
+
+meta_sum1 <- meta_sum %>% filter(Group!="nonCOVID19")
+meta_power <- cal_power(analytes=names(meta)[-c(1:2)], data=meta_sum1,k=3, n=c(24,24,24),a=0.05) 
+write.xlsx(list(meta_power=meta_power,prot_power=prot_power),
+           "C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/prot_met_power3x24.xlsx")
+
+prot_power <- cal_power(analytes=names(prot_data)[-c(1:2)], data=prot_sum1,k=3, n=c(50,25,25),a=0.05) 
+meta_power <- cal_power(analytes=names(meta)[-c(1:2)], data=meta_sum1,k=3, n=c(50,25,25),a=0.05) 
+write.xlsx(list(meta_power=meta_power,prot_power=prot_power),
+           "C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/prot_met_power 1x50 and 2x25.xlsx")
+
+
+### 2 group
+
+prot_sum1 <- prot_sum %>% filter(Status!="nonCOVID19",Status!="Healthy")
+prot_sum2 <- prot_sum %>% filter(Status!="nonCOVID19")
+##metabolites 906
+
+meta_sum1 <- meta_sum %>% filter(Group!="nonCOVID19",Group!="Healthy")
+meta_sum2 <- meta_sum %>% filter(Group!="nonCOVID19")
+
+####metabolites
+meta_power_re <- list()
+for(i in c(18:50)){
+  for (a in c(0.05, 0.005, 0.0005,0.00005)){
+    
+    meta_power <- cal_power(analytes=names(meta)[-c(1:2)], data=meta_sum1,k=2, n=c(i,i),a=a)
+    if (sum(meta_power$power>=0.8, na.rm = T)>0){
+    meta_power_re[[paste(i,a)]] <- meta_power %>% filter(power>=0.8) %>% summarize(n=length(analytes),totalSample=min(totalSample), lambda=min(lambda),alpha=min(alpha), delta=min(delta), power=min(power))
+      
+    } else{
+     meta_power_re[[paste(i,a)]] <- meta_power %>% summarize(n=0,totalSample=min(totalSample), lambda=NA,alpha=mean(alpha), delta=NA, power=NA)
+ 
+    }
+    
+  }
+}  
+
+meta_power_re_df <- do.call(rbind, meta_power_re)
+meta_power_re_df$alpha <- factor(meta_power_re_df$alpha)
+
+p1 <- ggplot(meta_power_re_df, aes(totalSample,n, color=alpha))+
+  geom_point()+
+  labs(y="Metabolites(power 0.8)")
+p2 <- ggplot(meta_power_re_df, aes(totalSample,delta, color=alpha))+
+  geom_point()+
+  labs(y="Effective Size(power 0.8)")
+grid.arrange(p1, p2)
+
+####proteins
+prot_power_re <- list()
+for(i in c(18:50)){
+  for (a in c(0.05, 0.005, 0.0005,0.00005)){
+    
+    prot_power <- cal_power(analytes=names(prot_data)[-c(1:2)], data=prot_sum1,k=2, n=c(i,i),a=a)
+    if (sum(prot_power$power>=0.8, na.rm = T)>0){
+      prot_power_re[[paste(i,a)]] <- prot_power %>% filter(power>=0.8) %>% summarize(n=length(analytes),totalSample=min(totalSample), lambda=min(lambda),alpha=min(alpha), delta=min(delta), power=min(power))
+      
+    } else{
+      prot_power_re[[paste(i,a)]] <- prot_power %>% summarize(n=0,totalSample=min(totalSample), lambda=NA,alpha=mean(alpha), delta=NA, power=NA)
+      
+    }
+  }
+}  
+
+prot_power_re_df <- do.call(rbind, prot_power_re)
+prot_power_re_df$alpha <- factor(prot_power_re_df$alpha)
+
+p1a <- ggplot(prot_power_re_df, aes(totalSample,n, color=alpha))+
+  geom_point()+
+  labs(y="Proteins(power 0.8)")
+p2a <- ggplot(prot_power_re_df, aes(totalSample,delta, color=alpha))+
+  geom_point()+
+  labs(y="Effective Size(power 0.8)")
+grid.arrange(p1a, p2a)
+
+pdf("C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/prot_metlog2_power2x18-50_alpha05-000005.pdf")
+grid.arrange(p1, p2)
+grid.arrange(p1a, p2a)
+dev.off()
+write.xlsx(list(meta_power=meta_power_re_df,prot_power=prot_power_re_df),
+           "C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/prot_metlog2_power2x18-50_alpha05-000005.xlsx")
+
+
+##### 2 group
+####metabolites
+
+meta_power30x30alpha05 <- cal_power(analytes=names(meta)[-c(1:2)], data=meta_sum1,k=2, n=c(30,30),a=0.05)
+meta_power25x25 <- cal_power(analytes=names(meta)[-c(1:2)], data=meta_sum1,k=2, n=c(25,25),a=0.0001)
+meta_power50x25 <- cal_power(analytes=names(meta)[-c(1:2)], data=meta_sum1,k=2, n=c(50,25),a=0.0001)
+meta_power <- rbind(meta_power25x25,meta_power50x25)
+meta_power$totalSample <- factor(meta_power$totalSample, labels=c("25:25", "50:25"))
+
+p1 <- ggplot(meta_power, aes(delta, power, color=totalSample))+
+  geom_point()+
+  labs(y="Power (alpha 0.0001)", x="Effective Size", title="Metabolomics",color="Sample Size")
+
+prot_power30x30alpha05 <- cal_power(analytes=names(prot_data)[-c(1:2)], data=prot_sum1,k=2, n=c(30,30),a=0.05)
+prot_power25x25 <- cal_power(analytes=names(prot_data)[-c(1:2)], data=prot_sum1,k=2, n=c(25,25),a=0.0001)
+prot_power50x25 <- cal_power(analytes=names(prot_data)[-c(1:2)], data=prot_sum1,k=2, n=c(50,25),a=0.0001)
+prot_power <- rbind(prot_power25x25,prot_power50x25)
+prot_power$totalSample <- factor(prot_power$totalSample, labels=c("25:25", "50:25"))
+
+p2 <- ggplot(prot_power, aes(delta, power, color=totalSample))+
+  geom_point()+
+  labs(y="Power (alpha 0.0001)", x="Effective Size",  title="Proteomics", color="Sample Size")
+
+pdf("C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/prot_metlog2_25vs25-50vs25 alpha0001.pdf")
+grid.arrange(p1, p2)
+dev.off()
+
+
+write.xlsx(list(prot_power30x30alpha05=prot_power30x30alpha05, meta_power30x30alpha05=meta_power30x30alpha05),"C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/prot_metlog2_30vs30alpha05.xlsx" )
+
+meta08_25x25 <- meta_power25x25 %>% filter(power>=0.8)
+meta08_50x25 <- meta_power50x25 %>% filter(power>=0.8)
+
+prot08_25x25 <- prot_power25x25 %>% filter(power>=0.8)
+prot08_50x25 <- prot_power50x25 %>% filter(power>=0.8)
+write.xlsx(list(meta_power25_25=meta08_25x25,meta_power50x25=meta08_50x25,
+                prot_power25_25=prot08_25x25,prot_power50x25=prot08_50x25),
+           "C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/prot_metlog2_25vs25-50vs25power08 alpha0001.xlsx")
+
+write.xlsx(list(meta_power25_25=meta_power25x25,meta_power50x25=meta_power50x25,
+                prot_power25_25=prot_power25x25,prot_power50x25=prot_power50x25),
+           "C:/zhijuncao/documents/grant/c20026 covid19/literatures/proteomics and metabolomics/prot_metlog2_25vs25-50vs25 alpha0001.xlsx")
+##### 3 group
+
+meta_power50x25x25 <- cal_power(analytes=names(meta)[-c(1:2)], data=meta_sum2,k=3, n=c(50, 25,25),a=0.05)
+prot_power50x25x25 <- cal_power(analytes=names(prot_data)[-c(1:2)], data=prot_sum2,k=3, n=c(50, 25,25),a=0.05)
+
+meta_power3 <- rbind(meta_power25x25,meta_power50x25,meta_power50x25x25)
+prot_power3 <- rbind(prot_power25x25,prot_power50x25,prot_power50x25x25)
+
+meta_power3$totalSample <- factor(meta_power3$totalSample, labels=c("25:25", "50:25","50:25:25"))
+prot_power3$totalSample <- factor(prot_power3$totalSample, labels=c("25:25", "50:25","50:25:25"))
+
+ggplot(meta_power3, aes(delta, power, color=totalSample))+
+  geom_point()
+
+ggplot(prot_power3, aes(delta, power, color=totalSample))+
+  geom_point()
+
