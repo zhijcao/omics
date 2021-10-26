@@ -11,7 +11,7 @@ knitr::opts_chunk$set(echo = TRUE, warning = TRUE, message =  TRUE)
 
 ## Descfription
 
-This document provides R source code for data analyis of the submitted manuscript (prostatic metabolomics)
+This document provides R source code for data analyis of the submitted manuscript (prostatic metabolomics from Nori)
 
 
 ```{r}
