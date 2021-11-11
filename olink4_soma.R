@@ -48,8 +48,8 @@ abnormal_normal <- function(data=sample, timepoint="A", analytes=names(sample)[-
   for (analyte in analytes){
     cat(j, " ")
     j <- j+1
-     normal <- data %>% filter(Status=="Normal", TimePoint==timepoint) %>% pluck(analyte)
-     abnormal <- data %>% filter(Status=="Abnormal", TimePoint==timepoint)%>% pluck(analyte)
+     normal <- data %>% filter(Status=="Normal", TimePoint=={{timepoint}}) %>% pluck(analyte)
+     abnormal <- data %>% filter(Status=="Abnormal", TimePoint=={{timepoint}})%>% pluck(analyte)
      fc.mean <- mean(abnormal)/mean(normal)
      t.pvalue<-ttest(log(abnormal,2), log(normal,2),paired=FALSE,var.qual=FALSE)
    
@@ -78,8 +78,8 @@ toA <- function(data=sample, timepoint="B", status="Normal", analytes=names(samp
   for (analyte in analytes){
      cat(j, " ")
      j <- j+1
-     a <- data %>% filter(Status==status, TimePoint=="A") %>% pluck(analyte)
-     treat <- data %>% filter(Status==status, TimePoint==timepoint) %>% pluck(analyte)
+     a <- data %>% filter(Status=={{status}}, TimePoint=="A") %>% pluck(analyte)
+     treat <- data %>% filter(Status=={{status}}, TimePoint=={{timepoint}}) %>% pluck(analyte)
   
      fc.mean <- mean(treat)/mean(a)
      t.pvalue<-ttest(log(treat,2), log(a,2),paired=FALSE,var.qual=FALSE)
@@ -217,7 +217,7 @@ abnormal_B.A_test <- toA(data=sample, timepoint="B", status="Abnormal", analytes
   w.re_df_sig <- w_sig(data=w.re_df, fc=1.2)
   write.xlsx(list(all=w.re_df,sig=w.re_df_sig), "C:/zhijuncao/cardiotoxicity/DOX_Olink/somacan_wilcox_result_all_11102021.xlsx")
   
-  w.re_id <-  map(w.re, ~.x%>% rownames_to_column("SomaId") %>% inner_join(somaid,.))
+  w.re_id <-  purrr::map(w.re, ~.x%>% rownames_to_column("SomaId") %>% inner_join(somaid,.))
   write.xlsx(w.re_id, "C:/zhijuncao/cardiotoxicity/DOX_Olink/somacan_wilcox_result_separated_11102021.xlsx") 
   
   
@@ -226,7 +226,7 @@ abnormal_B.A_test <- toA(data=sample, timepoint="B", status="Abnormal", analytes
   t.re_df_sig <- t_sig(data=t.re_df, fc=1.2)
   write.xlsx(list(all=t.re_df, sig=t.re_df_sig), "C:/zhijuncao/cardiotoxicity/DOX_Olink/somacan_ttest_result_all_11102021.xlsx") 
   
-  t.re_id <-  map(t.re, ~.x%>% rownames_to_column("SomaId") %>% inner_join(somaid,.))
+  t.re_id <-  purrr::map(t.re, ~.x%>% rownames_to_column("SomaId") %>% inner_join(somaid,.))
   write.xlsx(t.re_id, "C:/zhijuncao/cardiotoxicity/DOX_Olink/somacan_ttest_result_separated_11102021.xlsx") 
 
 ###Ratio
@@ -301,24 +301,24 @@ abnormal_B.A_test <- toA(data=sample, timepoint="B", status="Abnormal", analytes
 
 ###volcanoplot
   
-pfc <- c("Assay", "w.pvalue", "fc.median","w.FDR")
+pfc <- c("Targets", "w.pvalue", "fc.median","w.FDR")
 pdf("C:/zhijuncao/cardiotoxicity/DOX_Olink/somacan_wtest_result_volcanoplot.pdf", width = 6, height = 6)
   map2(w.re_id, names(w.re_id),~volcanoplotfdr(.x[,pfc], title=.y,fccutoff=1.2, label="labelsig",labelsize=3,pointsize=1, pcutoff=0.05, fdrcutoff=2))
 dev.off()
 
-pfc <- c("Assay", "t.pvalue", "fc.mean","t.FDR")
+pfc <- c("Targets", "t.pvalue", "fc.mean","t.FDR")
 pdf("C:/zhijuncao/cardiotoxicity/DOX_Olink/somacan_ttest_result_volcanoplot.pdf", width = 6, height = 6)
 map2(t.re_id, names(t.re_id),~volcanoplotfdr(.x[,pfc], title=.y,fccutoff=1.2, label="labelsig",labelsize=3,pointsize=1, pcutoff=0.05, fdrcutoff=2))
 
 dev.off()
 
 ##Ratio
-pfc <- c("Assay", "w.pvalue", "fc.median","w.FDR")
+pfc <- c("Targets", "w.pvalue", "fc.median","w.FDR")
 pdf("C:/zhijuncao/cardiotoxicity/DOX_Olink/somacan_wtest_result_ratio_volcanoplot.pdf", width = 6, height = 6)
 map2(w.re_id_ratio, names(w.re_id_ratio),~volcanoplotfdr(.x[,pfc], title=.y,fccutoff=1.2, label="labelsig",labelsize=3,pointsize=1, pcutoff=0.05, fdrcutoff=2))
 dev.off()
 
-pfc <- c("Assay", "t.pvalue", "fc.mean","t.FDR")
+pfc <- c("Targets", "t.pvalue", "fc.mean","t.FDR")
 pdf("C:/zhijuncao/cardiotoxicity/DOX_Olink/somacan_ttest_result_ratio_volcanoplot.pdf", width = 6, height = 6)
 map2(t.re_id_ratio, names(t.re_id_ratio),~volcanoplotfdr(.x[,pfc], title=.y,fccutoff=1.2, label="labelsig",labelsize=3,pointsize=1, pcutoff=0.05, fdrcutoff=2))
 
@@ -335,7 +335,7 @@ point_errorbar_plot <-
     for (analyte in analytes) {
       cat(j, "")
       j <- j+1
-      title <- paste(analyte, somaid$Assay[somaid$SomaId == analyte], sep=": ")
+      title <- paste(analyte, somaid$Targets[somaid$SomaId == analyte], sep=": ")
       p <- ggplot(data, aes(TimePoint, get(analyte))) +
         facet_wrap( ~Status) +
         theme_classic() +
