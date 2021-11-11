@@ -90,8 +90,8 @@ abnormal_normal <- function(data=olink_wide, timepoint="A", analytes=names(olink
   for (analyte in analytes){
     cat(j, " ")
     j <- j+1
-     normal <- data %>% filter(Status=="Normal", TimePoint==timepoint) %>% pluck(analyte)
-     abnormal <- data %>% filter(Status=="Abnormal", TimePoint==timepoint)%>% pluck(analyte)
+     normal <- data %>% filter(Status=="Normal", TimePoint=={{timepoint}}) %>% pluck(analyte)
+     abnormal <- data %>% filter(Status=="Abnormal", TimePoint=={{timepoint}})%>% pluck(analyte)
      fc.mean <- mean(abnormal)/mean(normal)
      t.pvalue<-ttest(log(abnormal,2), log(normal,2),paired=FALSE,var.qual=FALSE)
    
@@ -120,8 +120,8 @@ toA <- function(data=olink_wide, timepoint="B", status="Normal", analytes=names(
   for (analyte in analytes){
      cat(j, " ")
      j <- j+1
-     a <- data %>% filter(Status==status, TimePoint=="A") %>% pluck(analyte)
-     treat <- data %>% filter(Status==status, TimePoint==timepoint) %>% pluck(analyte)
+     a <- data %>% filter(Status=={{status}}, TimePoint=="A") %>% pluck(analyte)
+     treat <- data %>% filter(Status=={{status}}, TimePoint=={{timepoint}}) %>% pluck(analyte)
   
      fc.mean <- mean(treat)/mean(a)
      t.pvalue<-ttest(log(treat,2), log(a,2),paired=FALSE,var.qual=FALSE)
@@ -267,7 +267,7 @@ abnormal_B.A_test <- toA(data=olink_wide, timepoint="B", status="Abnormal", anal
   t.re_df_sig <- t_sig(data=t.re_df, fc=1.2)
   write.xlsx(list(all=t.re_df, sig=t.re_df_sig), "C:/zhijuncao/cardiotoxicity/DOX_Olink/20210555_Yu_NPX_2021-10-27_ttest_result_all_102921.xlsx") 
   
-  t.re_id <-  map(t.re, ~.x%>% rownames_to_column("OlinkID") %>% inner_join(olink_meta,.))
+  t.re_id <-  purrr::map(t.re, ~.x%>% rownames_to_column("OlinkID") %>% inner_join(olink_meta,.))
   write.xlsx(t.re_id, "C:/zhijuncao/cardiotoxicity/DOX_Olink/20210555_Yu_NPX_2021-10-27_ttest_result_separated_102921.xlsx") 
 
 ###Ratio
@@ -328,14 +328,14 @@ abnormal_B.A_test <- toA(data=olink_wide, timepoint="B", status="Abnormal", anal
   w.re_df_sig_ratio <- w_sig(data=w.re_df_ratio, fc=1.2)
   write.xlsx(list(all=w.re_df_ratio,sig=w.re_df_sig_ratio), "C:/zhijuncao/cardiotoxicity/DOX_Olink/20210555_Yu_NPX_2021-10-27_wilcox_result_all_ratio_103021.xlsx")
   
-  w.re_id_ratio <-  map(w.re_ratio, ~.x%>% rownames_to_column("OlinkID") %>% inner_join(olink_meta,.))
+  w.re_id_ratio <-  purrr::map(w.re_ratio, ~.x%>% rownames_to_column("OlinkID") %>% inner_join(olink_meta,.))
   write.xlsx(w.re_id_ratio, "C:/zhijuncao/cardiotoxicity/DOX_Olink/20210555_Yu_NPX_2021-10-27_wilcox_result_separated_ratio_103021.xlsx") 
   
   t.re_df_ratio <- t.re_ratio %>% data.frame() %>% rownames_to_column("OlinkID") %>% inner_join(olink_meta, .)
   t.re_df_sig_ratio <- t_sig(data=t.re_df_ratio, fc=1.2)
   write.xlsx(list(all=t.re_df_ratio, sig=t.re_df_sig_ratio), "C:/zhijuncao/cardiotoxicity/DOX_Olink/20210555_Yu_NPX_2021-10-27_ttest_result_all_ratio_103021.xlsx") 
   
-  t.re_id_ratio <-  map(t.re_ratio, ~.x%>% rownames_to_column("OlinkID") %>% inner_join(olink_meta,.))
+  t.re_id_ratio <-  purrr::map(t.re_ratio, ~.x%>% rownames_to_column("OlinkID") %>% inner_join(olink_meta,.))
   write.xlsx(t.re_id_ratio, "C:/zhijuncao/cardiotoxicity/DOX_Olink/20210555_Yu_NPX_2021-10-27_ttest_result_separated_ratio_103021.xlsx") 
   
 
